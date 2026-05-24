@@ -85,13 +85,15 @@ spec:
     spec:
       containers:
       - name: server-container
-        image: concur-platform-server:v3
+        image: concur-platform-server:v4
         imagePullPolicy: Never
         ports:
         - containerPort: 8080
         env:
         - name: RABBITMQ_URL
           value: "amqp://guest:guest@rabbitmq-service:5672/"
+        - name: DATABASE_URL
+          value: "postgres://postgres:password@postgres-service:5432/concur_db?sslmode=disable"  
 ---
 apiVersion: v1
 kind: Service
