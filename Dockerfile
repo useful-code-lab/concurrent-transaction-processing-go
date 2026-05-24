@@ -7,6 +7,7 @@ COPY . .
 # Собираем оба бинарника
 RUN go build -o /app/server ./cmd/server/main.go
 RUN go build -o /app/client ./cmd/client/main.go
+RUN go build -o /app/worker ./cmd/worker/main.go
 
 # --- ОБРАЗ СЕРВЕРА ---
 FROM alpine:3.20 AS server
@@ -20,3 +21,9 @@ FROM alpine:3.20 AS client
 WORKDIR /app
 COPY --from=builder /app/client .
 CMD ["./client"]
+
+# --- ОБРАЗ ВОРКЕРА (Новое) ---
+FROM alpine:3.20 AS worker
+WORKDIR /app
+COPY --from=builder /app/worker .
+CMD ["./worker"]
