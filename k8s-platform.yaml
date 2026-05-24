@@ -1,59 +1,41 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: platform-server-deployment
+  name: postgres-deployment
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: platform-server
+      app: postgres
   template:
     metadata:
       labels:
-        app: platform-server
+        app: postgres
     spec:
       containers:
-      - name: server-container
-        image: concur-platform-server:v1
-        imagePullPolicy: Never
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          value: "password"
+        - name: POSTGRES_DB
+          value: "concur_db"
         ports:
-        - containerPort: 8080
+        - containerPort: 5432
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: platform-server-service
+  name: postgres-service
 spec:
   selector:
-    app: platform-server
+    app: postgres
   ports:
     - protocol: TCP
-      port: 8080
-      targetPort: 8080
----
-# Симулятор конкурентных пользователей
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: platform-client-deployment
-spec:
-  replicas: 3 # 3 пользователя начнут одновременную атаку на сервер
-  selector:
-    matchLabels:
-      app: platform-client
-  template:
-    metadata:
-      labels:
-        app: platform-client
-    spec:
-      containers:
-      - name: client-container
-        image: concur-platform-client:v1
-        imagePullPolicy: Never
-        env:
-        # Переопределяем адрес подключения (внутри K8s используем имя сервиса)
-        - name: SERVER_URL
-          value: "ws://platform-server-service:8080/ws"
+      port: 5432
+      targetPort: 5432
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -73,8 +55,7 @@ spec:
       - name: rabbitmq
         image: rabbitmq:3-management-alpine
         ports:
-        - containerPort: 5672  # Порт для кода (AMQP)
-        - containerPort: 15672 # Порт для веб-панели управления
+        - containerPort: 5672
 ---
 apiVersion: v1
 kind: Service
@@ -84,11 +65,102 @@ spec:
   selector:
     app: rabbitmq
   ports:
-    - name: amqp
-      protocol: TCP
+    - protocol: TCP
       port: 5672
       targetPort: 5672
-    - name: management
-      protocol: TCP
-      port: 15672
-      targetPort: 15672
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-server-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: platform-server
+  template:
+    metadata:
+      labels:
+        app: platform-server
+    spec:
+      containers:
+      - name: server-container
+        image: concur-platform-server:v3
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: RABBITMQ_URL
+          value: "amqp://guest:guest@rabbitmq-service:5672/"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-server-service
+spec:
+  selector:
+    app: platform-server
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-worker-deployment
+spec:
+  replicas: 1 # Строго один поток для гарантированной последовательности обработки
+  selector:
+    matchLabels:
+      app: platform-worker
+  template:
+    metadata:
+      labels:
+        app: platform-worker
+    spec:
+      containers:
+      - name: worker-container
+        image: concur-platform-worker:v3
+        imagePullPolicy: Never
+        env:
+        - name: DATABASE_URL
+          value: "postgres://postgres:password@postgres-service:5432/concur_db?sslmode=disable"
+        - name: RABBITMQ_URL
+          value: "amqp://guest:guest@rabbitmq-service:5672/"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-client-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: platform-client
+  template:
+    metadata:
+      labels:
+        app: platform-client
+    spec:
+      containers:
+      - name: client-container
+        image: concur-platform-client:v1
+        imagePullPolicy: Never
+        env:
+        - name: SERVER_URL
+          value: "ws://platform-server-service:8080/ws"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-server-lb
+spec:
+  type: NodePort
+  selector:
+    app: platform-server
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080

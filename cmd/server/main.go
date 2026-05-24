@@ -76,6 +76,18 @@ func main() {
 		log.Fatalf("Не удалось объявить очередь: %v", err)
 	}
 
+	// Внутри функции main() после объявления первой очереди добавьте:
+	_, err = rabbitChan.QueueDeclare(
+		"resource_events_queue",
+		true, false, false, false, nil,
+	)
+	if err != nil {
+		log.Fatalf("Не удалось объявить event-очередь: %v", err)
+	}
+
+	// Запускаем асинхронный поток прослушивания ответов от воркера
+	go listenWorkerEvents()
+
 	http.HandleFunc("/ws", handleWebConnections)
 	log.Println("WS-API Gateway запущен на :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -123,5 +135,30 @@ func handleWebConnections(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Задача на обновление (Версия %d) принята и отправлена в очередь\n", msg.Resource.Version)
 			}
 		}
+	}
+}
+
+func listenWorkerEvents() {
+	msgs, err := rabbitChan.Consume("resource_events_queue", "", true, false, false, false, nil)
+	if err != nil {
+		log.Printf("Ошибка подписки на события воркера: %v", err)
+		return
+	}
+
+	for d := range msgs {
+		var res Resource
+		json.Unmarshal(d.Body, &res)
+
+		// Рассылаем абсолютно всем подключенным клиентам новую версию ресурса
+		clientsMu.Lock()
+		for client := range clients {
+			err := client.WriteJSON(Message{Action: "broadcast", Resource: res})
+			if err != nil {
+				client.Close()
+				delete(clients, client)
+			}
+		}
+		clientsMu.Unlock()
+		log.Printf("[BROADCAST] Всем клиентам отправлена новая версия из БД: %d\n", res.Version)
 	}
 }

@@ -115,8 +115,28 @@ func main() {
 				d.Nack(false, true)
 				continue
 			}
+			// ... (внутри цикла for d := range msgs после успешного апдейта БД) ...
 		} else {
 			log.Printf("[УСПЕХ] База данных обновлена до версии %d\n", newVersion)
+
+			// ДОПОЛНЕНИЕ: Отправляем событие об успехе обратно в RabbitMQ для сервера
+			req.Version = newVersion
+			eventBody, _ := json.Marshal(req)
+
+			err = ch.PublishWithContext(
+				ctx,
+				"",
+				"resource_events_queue",
+				false, false,
+				amqp.Publishing{
+					DeliveryMode: amqp.Persistent,
+					ContentType:  "application/json",
+					Body:         eventBody,
+				},
+			)
+			if err != nil {
+				log.Printf("Ошибка отправки события в RabbitMQ: %v", err)
+			}
 		}
 
 		d.Ack(false) // Стираем задачу из RabbitMQ после обработки
