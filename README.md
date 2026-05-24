@@ -14,3 +14,14 @@ WS-Сервер платформы concur-platform запущен на :8080
 2026/05/24 08:12:56 [АПДЕЙТ] Пытаемся отправить данные с нашей версией: 1
 2026/05/24 08:12:56 [СИНХРОНИЗАЦИЯ] Получена актуальная версия: 2, Данные: Изменение от Умного Клиента
 ```
+
+## Сборка сервера, клиента
+```bash
+eval $(minikube docker-env) # Привязка к Minikube
+
+# Собираем сервер
+docker build --target server -t concur-platform-server:v1 .
+
+# Собираем клиентский симулятор
+docker build --target client -t concur-platform-client:v1 .
+```
