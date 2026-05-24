@@ -85,7 +85,7 @@ spec:
     spec:
       containers:
       - name: server-container
-        image: concur-platform-server:v4
+        image: concur-platform-server:v5
         imagePullPolicy: Never
         ports:
         - containerPort: 8080
@@ -152,6 +152,8 @@ spec:
         env:
         - name: SERVER_URL
           value: "ws://platform-server-service:8080/ws"
+        - name: TARGET_RESOURCE_ID
+          value: "1" # Клиенты могут разделять один ID для проверки конкуренции, либо вы можете развернуть новые поды с ID "2", "3"  
 ---
 apiVersion: v1
 kind: Service

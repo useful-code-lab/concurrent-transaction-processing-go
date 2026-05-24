@@ -21,21 +21,27 @@ type Message struct {
 }
 
 func main() {
-	// Ищем переменную окружения. Если её нет — используем локальный дефолт
 	serverURL := os.Getenv("SERVER_URL")
 	if serverURL == "" {
 		serverURL = "ws://localhost:8080/ws"
 	}
-	log.Printf("Подключение к серверу %s...", serverURL)
 
-	c, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
-	// ... далее весь код без изменений ...
+	// ДИНАМИКА: Каждый клиент может работать со своим уникальным ресурсом
+	targetID := os.Getenv("TARGET_RESOURCE_ID")
+	if targetID == "" {
+		targetID = "1" // Дефолт
+	}
 
+	// Формируем динамический URL с параметром ?id=...
+	finalURL := serverURL + "?id=" + targetID
+	log.Printf("Подключение к серверу платформы: %s...", finalURL)
+
+	c, _, err := websocket.DefaultDialer.Dial(finalURL, nil)
 	if err != nil {
-		log.Fatalf("Ошибка подключения: %v", err)
+		log.Fatalf("Ошибка подключения клиента: %v", err)
 	}
 	defer c.Close()
-
+    
 	// Локальная копия ресурса в памяти клиента
 	var localRes Resource
 

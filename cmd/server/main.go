@@ -123,22 +123,27 @@ func handleWebConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
+	// ДИНАМИКА: Получаем ID ресурса из URL запроса (например, /ws?id=45)
+	resourceID := r.URL.Query().Get("id")
+	if resourceID == "" {
+		resourceID = "1" // Значение по умолчанию для совместимости
+	}
+
 	clientsMu.Lock()
 	clients[ws] = true
 	clientsMu.Unlock()
 
-	log.Println("Новый пользователь подключился. Отправляем стартовое состояние...")
+	log.Printf("Пользователь подключился к ресурсу ID: %s. Отправляем состояние...\n", resourceID)
 
-	// ДОПОЛНЕНИЕ: Сразу при подключении читаем актуальные данные из БД и шлем клиенту
+	// ИСПРАВЛЕНО: Подставляем resourceID вместо жесткой единицы
 	var startRes Resource
-	err = dbPool.QueryRow(r.Context(), "SELECT id, data, version FROM resources WHERE id='1'").
+	err = dbPool.QueryRow(r.Context(), "SELECT id, data, version FROM resources WHERE id=$1", resourceID).
 		Scan(&startRes.ID, &startRes.Data, &startRes.Version)
 	if err != nil {
-		log.Printf("Ошибка чтения стартового состояния из СУБД: %v", err)
-	} else {
-		// Отправляем клиенту, чтобы у него локальная версия заполнилась из базы (например, стала 1, а не 0)
-		ws.WriteJSON(Message{Action: "read", Resource: startRes})
+		// Если ресурса еще нет в БД, инициализируем его дефолтными значениями для клиента
+		startRes = Resource{ID: resourceID, Data: "Новый ресурс", Version: 1}
 	}
+	ws.WriteJSON(Message{Action: "read", Resource: startRes})
 
 	for {
 		var msg Message
@@ -149,10 +154,12 @@ func handleWebConnections(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// ДОПОЛНЕНИЕ: Если клиент сам явно шлет запрос "read", тоже обрабатываем его
+		// Переопределяем ID из соображений безопасности (клиент работает только со своим ID)
+		msg.Resource.ID = resourceID
+
 		if msg.Action == "read" {
 			var currentRes Resource
-			err = dbPool.QueryRow(r.Context(), "SELECT id, data, version FROM resources WHERE id='1'").
+			err = dbPool.QueryRow(r.Context(), "SELECT id, data, version FROM resources WHERE id=$1", resourceID).
 				Scan(&currentRes.ID, &currentRes.Data, &currentRes.Version)
 			if err == nil {
 				ws.WriteJSON(Message{Action: "read", Resource: currentRes})
@@ -161,11 +168,9 @@ func handleWebConnections(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if msg.Action == "update" {
-			// АСИНХРОННОСТЬ: Пакуем в JSON и шлем в RabbitMQ
 			body, _ := json.Marshal(msg.Resource)
-
 			err = rabbitChan.PublishWithContext(
-				context.Background(), // Здесь можно заменить на ctx, если ctx объявлен глобально
+				context.Background(),
 				"",        
 				queueName, 
 				false,     
@@ -178,8 +183,6 @@ func handleWebConnections(w http.ResponseWriter, r *http.Request) {
 			)
 			if err != nil {
 				log.Printf("Ошибка отправки в RabbitMQ: %v", err)
-			} else {
-				log.Printf("Задача на обновление (Версия %d) принята и отправлена в очередь\n", msg.Resource.Version)
 			}
 		}
 	}

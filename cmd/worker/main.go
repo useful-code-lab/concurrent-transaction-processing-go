@@ -101,44 +101,43 @@ func main() {
 			continue
 		}
 
-		log.Printf("[ОЧЕРЕДЬ] Обработка ресурса ID %s. Пытаемся записать версию %d...\n", req.ID, req.Version)
+				log.Printf("[ОЧЕРЕДЬ] Обработка ресурса ID %s. Пытаемся записать версию %d...\n", req.ID, req.Version)
 
-		query := `UPDATE resources SET data = $1, version = version + 1 WHERE id = '1' AND version = $2 RETURNING version;`
+		// ДИНАМИКА: Используем ON CONFLICT для автоматического создания новых ID,
+		// и фильтр по переданному req.Version для оптимистической блокировки существующих.
+		query := `
+			INSERT INTO resources (id, data, version) 
+			VALUES ($1, $2, 1)
+			ON CONFLICT (id) 
+			DO UPDATE SET data = EXCLUDED.data, version = resources.version + 1
+			WHERE resources.version = $3
+			RETURNING version;
+		`
 		var newVersion int
-		err := dbPool.QueryRow(ctx, query, req.Data, req.Version).Scan(&newVersion)
+		err := dbPool.QueryRow(ctx, query, req.ID, req.Data, req.Version).Scan(&newVersion)
 
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) || err.Error() == "no rows in result set" {
-				log.Printf("[ОТКЛОНЕНО] Конфликт версий в БД для версии %d. Пропускаем.\n", req.Version)
+				log.Printf("[ОТКЛОНЕНО] Конфликт версий в БД для ID %s (версия %d). Пропускаем.\n", req.ID, req.Version)
 			} else {
 				log.Printf("[ОШИБКА СУБД] Сбой: %v. Возвращаем в очередь!\n", err)
-				d.Nack(false, true)
+				d.Nack(false, true) 
 				continue
 			}
-			// ... (внутри цикла for d := range msgs после успешного апдейта БД) ...
 		} else {
-			log.Printf("[УСПЕХ] База данных обновлена до версии %d\n", newVersion)
+			log.Printf("[УСПЕХ] Ресурс ID %s успешно обновлен до версии %d\n", req.ID, newVersion)
 
-			// ДОПОЛНЕНИЕ: Отправляем событие об успехе обратно в RabbitMQ для сервера
+			// Отправляем событие обратно для броадкаста
 			req.Version = newVersion
 			eventBody, _ := json.Marshal(req)
-
-			err = ch.PublishWithContext(
-				ctx,
-				"",
-				"resource_events_queue",
-				false, false,
+			ch.PublishWithContext(ctx, "", "resource_events_queue", false, false,
 				amqp.Publishing{
 					DeliveryMode: amqp.Persistent,
 					ContentType:  "application/json",
 					Body:         eventBody,
 				},
 			)
-			if err != nil {
-				log.Printf("Ошибка отправки события в RabbitMQ: %v", err)
-			}
 		}
-
-		d.Ack(false) // Стираем задачу из RabbitMQ после обработки
+		d.Ack(false)
 	}
 }
