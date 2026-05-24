@@ -2,9 +2,7 @@ package main
 
 import (
 	"log"
-	"net/url"
 	"os"
-	"os/signal"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -23,10 +21,16 @@ type Message struct {
 }
 
 func main() {
-	u := url.URL{Scheme: "ws", Host: "localhost:8080", Path: "/ws"}
-	log.Printf("Подключение к серверу %s...", u.String())
+	// Ищем переменную окружения. Если её нет — используем локальный дефолт
+	serverURL := os.Getenv("SERVER_URL")
+	if serverURL == "" {
+		serverURL = "ws://localhost:8080/ws"
+	}
+	log.Printf("Подключение к серверу %s...", serverURL)
 
-	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	c, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	// ... далее весь код без изменений ...
+
 	if err != nil {
 		log.Fatalf("Ошибка подключения: %v", err)
 	}
@@ -66,35 +70,47 @@ func main() {
 	c.WriteJSON(Message{Action: "read"})
 	time.Sleep(500 * time.Millisecond) // Даем время на синхронизацию
 
-	// Симулируем попытку конкурентного обновления с алгоритмом Retry
+	// Симулируем постоянную работу пользователя внутри Kubernetes
 	go func() {
 		newData := "Изменение от Умного Клиента"
-		backoff := 500 * time.Millisecond // Стартовая задержка повтора
 
-		log.Printf("[АПДЕЙТ] Пытаемся отправить данные с нашей версией: %d\n", localRes.Version)
-		c.WriteJSON(Message{
-			Action:   "update",
-			Resource: Resource{ID: localRes.ID, Data: newData, Version: localRes.Version},
-		})
+		for {
+			backoff := 500 * time.Millisecond // Сброс задержки для новой сессии
 
-		// Ожидаем: если прилетит конфликт, сработает этот цикл
-		for range retryChan {
-			log.Printf("[RETRY] Запуск повторной попытки через %v...\n", backoff)
-			time.Sleep(backoff)
-			
-			// Экспоненциальное увеличение задержки (Exponential Backoff)
-			backoff *= 2 
-
-			log.Printf("[RETRY] Отправка данных заново с обновленной версией: %d\n", localRes.Version)
+			log.Printf("[АПДЕЙТ] Отправляем данные. Наша версия: %d\n", localRes.Version)
 			c.WriteJSON(Message{
 				Action:   "update",
 				Resource: Resource{ID: localRes.ID, Data: newData, Version: localRes.Version},
 			})
+
+			// Ожидаем сигналов из канала ретраев
+			// Если сервер ответит "conflict", сработает этот внутренний цикл
+			for {
+				select {
+				case <-retryChan:
+					log.Printf("[RETRY] Запуск повторной попытки через %v...\n", backoff)
+					time.Sleep(backoff)
+					backoff *= 2 // Экспоненциальный рост паузы
+
+					log.Printf("[RETRY] Отправка заново. Версия: %d\n", localRes.Version)
+					c.WriteJSON(Message{
+						Action:   "update",
+						Resource: Resource{ID: localRes.ID, Data: newData, Version: localRes.Version},
+					})
+				case <-time.After(2 * time.Second):
+					// Если в течение 2 секунд конфликтов не прилетало,
+					// значит наше обновление зафиксировано успешно!
+					goto NextIteration
+				}
+			}
+
+		NextIteration:
+			log.Println("[УСПЕХ] Данные сохранены. Отдыхаем 5 секунд перед следующим изменением...")
+			time.Sleep(5 * time.Second)
 		}
 	}()
 
-	// Держим клиент запущенным
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
-	<-interrupt
+	// ИСПРАВЛЕНО: Вместо ожидания Ctrl+C используем вечный пустой канал,
+	// чтобы под в Kubernetes работал бесконечно
+	select {}
 }

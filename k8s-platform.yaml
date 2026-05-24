@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-server-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: platform-server
+  template:
+    metadata:
+      labels:
+        app: platform-server
+    spec:
+      containers:
+      - name: server-container
+        image: concur-platform-server:v1
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-server-service
+spec:
+  selector:
+    app: platform-server
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+---
+# Симулятор конкурентных пользователей
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-client-deployment
+spec:
+  replicas: 3 # 3 пользователя начнут одновременную атаку на сервер
+  selector:
+    matchLabels:
+      app: platform-client
+  template:
+    metadata:
+      labels:
+        app: platform-client
+    spec:
+      containers:
+      - name: client-container
+        image: concur-platform-client:v1
+        imagePullPolicy: Never
+        env:
+        # Переопределяем адрес подключения (внутри K8s используем имя сервиса)
+        - name: SERVER_URL
+          value: "ws://platform-server-service:8080/ws"
